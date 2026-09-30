@@ -44,7 +44,7 @@ const RANKS = [
 let chartInstances = {};
 
 // Supabase State Variables
-let supabaseUrl = localStorage.getItem("winterArc_sb_url") || "";
+let supabaseUrl = localStorage.getItem("winterArc_sb_url") || "https://iwkdiglbtufiudxadmcq.supabase.co";
 let supabaseAnonKey = localStorage.getItem("winterArc_sb_key") || "";
 let supabaseClient = null;
 let currentUser = null;
