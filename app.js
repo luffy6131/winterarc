@@ -48,6 +48,368 @@ let supabaseUrl = localStorage.getItem("winterArc_sb_url") || "https://iwkdiglbt
 let supabaseAnonKey = localStorage.getItem("winterArc_sb_key") || "";
 let supabaseClient = null;
 let currentUser = null;
+let realtimeChannel = null;
+let isRemoteSyncing = false;
+const MIGRATION_VERSION = "v1";
+
+// ============================================================================
+// INITIALIZATION & STATE PERSISTENCE
+// ============================================================================
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadState();
+  initDaySelectors();
+  applyTheme(appData.theme || "arctic");
+  updateRankUI();
+  renderDashboard();
+  renderMatrixTable();
+  renderReflections();
+  initSupabase();
+
+  // Set report date string
+  const dateStrElement = document.getElementById("report-date-str");
+  if(dateStrElement) {
+    dateStrElement.innerText = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+});
+
+function saveState(autoCloudSync = true) {
+  if (autoCloudSync) {
+    appData.lastUpdated = Date.now();
+  }
+  try {
+    localStorage.setItem("winterArcData", JSON.stringify(appData));
+  } catch (e) {
+    console.error("Failed to save state to localStorage", e);
+  }
+
+  if (autoCloudSync && !isRemoteSyncing && supabaseClient && currentUser) {
+    syncAllToSupabase();
+  }
+}
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem("winterArcData");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      appData = { ...appData, ...parsed };
+      if (!appData.habits || appData.habits.length === 0) {
+        appData.habits = [
+          { id: "h1", name: "Workout / Training", goal: "60 Min" },
+          { id: "h2", name: "10k Daily Steps", goal: "10,000" },
+          { id: "h3", name: "Read 20 Pages", goal: "20 pgs" },
+          { id: "h4", name: "Cold Shower", goal: "Daily" },
+          { id: "h5", name: "No Sugar / Junk", goal: "Strict" },
+          { id: "h6", name: "Deep Work 4h", goal: "4 Hours" }
+        ];
+      }
+    }
+  } catch (e) {
+    console.error("Error loading localStorage state:", e);
+  }
+
+  const nameInput = document.getElementById("user-name-input");
+  const mottoInput = document.getElementById("user-motto-input");
+  if(nameInput) nameInput.value = appData.userName || "Warrior Protocol";
+  if(mottoInput) mottoInput.value = appData.userMotto || "Discipline over motivation. Complete the 31-day arc.";
+}
+
+function saveUserProfile() {
+  const nameInput = document.getElementById("user-name-input");
+  const mottoInput = document.getElementById("user-motto-input");
+  if(nameInput) appData.userName = nameInput.value || "Warrior Protocol";
+  if(mottoInput) appData.userMotto = mottoInput.value || "Discipline over motivation. Complete the 31-day arc.";
+  saveState();
+  showToast("Profile details updated!");
+}
+
+// ============================================================================
+// SUPABASE AUTHENTICATION & CLOUD SYNC
+// ============================================================================
+
+function initSupabase() {
+  const urlInput = document.getElementById("sb-url-input");
+  const keyInput = document.getElementById("sb-key-input");
+  if (urlInput) urlInput.value = supabaseUrl;
+  if (keyInput) keyInput.value = supabaseAnonKey;
+
+  if (window.supabase && supabaseUrl && supabaseAnonKey) {
+    try {
+      supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
+      
+      supabaseClient.auth.onAuthStateChange((event, session) => {
+        const prevUser = currentUser;
+        currentUser = session ? session.user : null;
+        updateAuthUI();
+        if (currentUser && (!prevUser || prevUser.id !== currentUser.id)) {
+          fetchFromSupabase();
+          subscribeRealtime();
+        } else if (!currentUser) {
+          if (realtimeChannel) {
+            supabaseClient.removeChannel(realtimeChannel);
+            realtimeChannel = null;
+          }
+        }
+      });
+
+      supabaseClient.auth.getSession().then(({ data }) => {
+        if (data && data.session) {
+          currentUser = data.session.user;
+          updateAuthUI();
+          fetchFromSupabase();
+          subscribeRealtime();
+        }
+      });
+    } catch (e) {
+      console.error("Supabase client init error:", e);
+      updateAuthUI();
+    }
+  } else {
+    updateAuthUI();
+  }
+}
+
+function saveSupabaseConfig() {
+  const urlInput = document.getElementById("sb-url-input");
+  const keyInput = document.getElementById("sb-key-input");
+
+  supabaseUrl = urlInput ? urlInput.value.trim() : "";
+  supabaseAnonKey = keyInput ? keyInput.value.trim() : "";
+
+  localStorage.setItem("winterArc_sb_url", supabaseUrl);
+  localStorage.setItem("winterArc_sb_key", supabaseAnonKey);
+
+  initSupabase();
+  showToast("Supabase credentials saved!");
+  switchAuthTab('login');
+}
+
+function updateAuthUI() {
+  const btnLabel = document.getElementById("auth-btn-label");
+  const loggedOutSec = document.getElementById("logged-out-section");
+  const loggedInSec = document.getElementById("logged-in-section");
+  const userEmailDisplay = document.getElementById("user-email-display");
+  const cloudBadge = document.getElementById("cloud-status-badge");
+
+  if (currentUser) {
+    if (btnLabel) btnLabel.innerText = currentUser.email ? currentUser.email.split("@")[0] : "Synced";
+    if (loggedOutSec) loggedOutSec.classList.add("hidden");
+    if (loggedInSec) loggedInSec.classList.remove("hidden");
+    if (userEmailDisplay) userEmailDisplay.innerText = currentUser.email || "Authenticated User";
+    if (cloudBadge) {
+      cloudBadge.innerText = "☁️ Cloud Synced";
+      cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 font-bold";
+    }
+  } else {
+    if (btnLabel) btnLabel.innerText = "Sync Cloud";
+    if (loggedOutSec) loggedOutSec.classList.remove("hidden");
+    if (loggedInSec) loggedInSec.classList.add("hidden");
+    if (cloudBadge) {
+      cloudBadge.innerText = "💾 Local Mode";
+      cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
+    }
+  }
+}
+
+async function signInWithEmail() {
+  if (!supabaseClient) {
+    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
+    switchAuthTab('config');
+    return;
+  }
+  const email = document.getElementById("auth-email").value.trim();
+  const password = document.getElementById("auth-password").value;
+  if (!email || !password) {
+    alert("Please enter both email and password.");
+    return;
+  }
+
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) {
+    alert("Login failed: " + error.message);
+  } else {
+    showToast("Signed in successfully!");
+    closeAuthModal();
+  }
+}
+
+async function signUpWithEmail() {
+  if (!supabaseClient) {
+    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
+    switchAuthTab('config');
+    return;
+  }
+  const email = document.getElementById("auth-email").value.trim();
+  const password = document.getElementById("auth-password").value;
+  if (!email || !password) {
+    alert("Please enter both email and password.");
+    return;
+  }
+
+  const { data, error } = await supabaseClient.auth.signUp({ email, password });
+  if (error) {
+    alert("Sign up failed: " + error.message);
+  } else {
+    showToast("Account created! Check your email to confirm.");
+  }
+}
+
+async function signInWithGoogle() {
+  if (!supabaseClient) {
+    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
+    switchAuthTab('config');
+    return;
+  }
+  const { data, error } = await supabaseClient.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.href }
+  });
+  if (error) {
+    alert("Google OAuth failed: " + error.message);
+  }
+}
+
+async function signOutUser() {
+  if (supabaseClient) {
+    if (realtimeChannel) {
+      supabaseClient.removeChannel(realtimeChannel);
+      realtimeChannel = null;
+    }
+    await supabaseClient.auth.signOut();
+    currentUser = null;
+    updateAuthUI();
+    showToast("Signed out. Operating in local mode.");
+  }
+}
+
+async function syncAllToSupabase() {
+  if (!supabaseClient || !currentUser || isRemoteSyncing) return;
+
+  try {
+    const payload = {
+      user_id: currentUser.id,
+      state_data: appData,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabaseClient
+      .from("winter_arc_userdata")
+      .upsert(payload, { onConflict: "user_id" });
+
+    if (error) {
+      console.warn("Supabase Cloud sync warning:", error.message);
+    } else {
+      const migKey = `winterArc_migrated_${MIGRATION_VERSION}_${currentUser.id}`;
+      localStorage.setItem(migKey, "true");
+    }
+  } catch (e) {
+    console.error("Supabase sync exception:", e);
+  }
+}
+
+async function fetchFromSupabase() {
+  if (!supabaseClient || !currentUser) return;
+
+  try {
+    const { data, error } = await supabaseClient
+      .from("winter_arc_userdata")
+      .select("state_data, updated_at")
+      .eq("user_id", currentUser.id)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Fetch from Supabase error:", error.message);
+      return;
+    }
+
+    const migKey = `winterArc_migrated_${MIGRATION_VERSION}_${currentUser.id}`;
+    const isMigrated = localStorage.getItem(migKey) === "true";
+    const localRaw = localStorage.getItem("winterArcData");
+    const localData = localRaw ? JSON.parse(localRaw) : null;
+
+    if (!data) {
+      // CASE 1: No Cloud Data Exists
+      if (localData) {
+        await syncAllToSupabase();
+        showToast("Local progress migrated to Cloud! ☁️");
+      } else {
+        await syncAllToSupabase();
+      }
+    } else {
+      // CASE 2: Cloud Data Exists
+      const cloudData = data.state_data;
+      const cloudUpdated = cloudData.lastUpdated || (data.updated_at ? new Date(data.updated_at).getTime() : 0);
+      const localUpdated = localData ? (localData.lastUpdated || 0) : 0;
+
+      if (!isMigrated && localData && localUpdated > cloudUpdated) {
+        // CASE 3: Un-migrated local data is newer than cloud data
+        appData = { ...appData, ...cloudData, ...localData };
+        await syncAllToSupabase();
+        showToast("Merged offline local edits into Cloud! 🔄");
+      } else {
+        // CASE 4: Returning user / Cloud is Source of Truth
+        appData = { ...appData, ...cloudData };
+        localStorage.setItem(migKey, "true");
+        saveState(false); // Cache locally without triggering cloud sync
+        showToast("Cloud state synced successfully! ☁️");
+      }
+    }
+
+    // Refresh UI Components
+    applyTheme(appData.theme || "arctic");
+    updateRankUI();
+    renderDashboard();
+    renderMatrixTable();
+    renderReflections();
+
+    const nameInput = document.getElementById("user-name-input");
+    const mottoInput = document.getElementById("user-motto-input");
+    if(nameInput) nameInput.value = appData.userName || "Warrior Protocol";
+    if(mottoInput) mottoInput.value = appData.userMotto || "Discipline over motivation. Complete the 31-day arc.";
+  } catch (e) {
+    console.error("Fetch from Supabase exception:", e);
+  }
+}
+
+function subscribeRealtime() {
+  if (!supabaseClient || !currentUser) return;
+  if (realtimeChannel) {
+    supabaseClient.removeChannel(realtimeChannel);
+  }
+
+  realtimeChannel = supabaseClient
+    .channel(`realtime:winter_arc_${currentUser.id}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'winter_arc_userdata',
+        filter: `user_id=eq.${currentUser.id}`
+      },
+      (payload) => {
+        if (payload.new && payload.new.state_data) {
+          const remoteTime = payload.new.state_data.lastUpdated || 0;
+          const localTime = appData.lastUpdated || 0;
+          
+          if (remoteTime > localTime) {
+            isRemoteSyncing = true;
+            appData = { ...appData, ...payload.new.state_data };
+            saveState(false); // Save to local cache without triggering re-sync loop!
+            applyTheme(appData.theme || "arctic");
+            updateRankUI();
+            renderDashboard();
+            renderMatrixTable();
+            renderReflections();
+            isRemoteSyncing = false;
+            showToast("Synced live update from another device 📱💻");
+          }
+        }
+      }
+    )
+    .subscribe();
+}
 
 // ============================================================================
 // INITIALIZATION & STATE PERSISTENCE
