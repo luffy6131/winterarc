@@ -9,6 +9,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Chart.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Supabase JS Client CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- FontAwesome Icons CDN -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- Custom Glassmorphism & Theme Styles -->
@@ -52,8 +54,14 @@
         </button>
       </nav>
 
-      <!-- Theme Switcher & XP Pill -->
+      <!-- Theme Switcher, Rank & Supabase Auth Pill -->
       <div class="flex items-center gap-3">
+        <!-- Supabase Cloud Sync / Auth Button -->
+        <button id="auth-header-btn" onclick="openAuthModal()" class="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs rounded-lg font-bold transition-all flex items-center gap-1.5">
+          <i class="fa-solid fa-cloud text-emerald-400"></i>
+          <span id="auth-btn-label">Sync Cloud</span>
+        </button>
+
         <!-- Rank Badge Pill -->
         <div class="hidden sm:flex items-center gap-2 bg-cyan-950/40 border border-cyan-500/30 px-3 py-1 rounded-lg">
           <i class="fa-solid fa-shield-halved text-cyan-400 text-sm"></i>
@@ -100,6 +108,7 @@
                 <i class="fa-solid fa-crown mr-1"></i> Frost Initiate
               </span>
               <span class="text-xs text-slate-400">Day <span id="dash-current-day-num" class="text-cyan-300 font-bold">1</span> of 31 Matrix</span>
+              <span id="cloud-status-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">💾 Local Mode</span>
             </div>
             
             <div class="flex items-center gap-3">
@@ -610,6 +619,86 @@
         <button onclick="closeAddHabitModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg">Cancel</button>
         <button onclick="saveNewHabit()" class="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold rounded-lg">Add Habit</button>
       </div>
+    </div>
+  </div>
+
+  <!-- SUPABASE AUTH & CLOUD SYNC MODAL -->
+  <div id="modal-auth" class="fixed inset-0 z-50 flex items-center justify-center modal-overlay hidden px-4">
+    <div class="winter-glass-card max-w-lg w-full p-6 space-y-4">
+      <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+        <h3 class="text-lg font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-cloud text-emerald-400"></i> Supabase Auth & Cloud Sync
+        </h3>
+        <button onclick="closeAuthModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+
+      <!-- Auth Modal Tabs -->
+      <div class="flex border-b border-slate-800 text-xs">
+        <button onclick="switchAuthTab('login')" id="authtab-login" class="px-4 py-2 font-bold text-emerald-400 border-b-2 border-emerald-400">Login / Sign Up</button>
+        <button onclick="switchAuthTab('config')" id="authtab-config" class="px-4 py-2 font-bold text-slate-400 border-b-2 border-transparent">Supabase Config</button>
+      </div>
+
+      <!-- TAB 1: LOGIN / SIGN UP -->
+      <div id="authview-login" class="space-y-4 text-xs">
+        <div id="logged-out-section" class="space-y-3">
+          <!-- Google OAuth Button -->
+          <button onclick="signInWithGoogle()" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl border border-slate-700 flex items-center justify-center gap-2 transition-all">
+            <svg class="w-4 h-4" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+            Sign In with Google
+          </button>
+
+          <div class="flex items-center gap-2 my-2">
+            <div class="flex-grow border-t border-slate-800"></div>
+            <span class="text-[10px] text-slate-500 uppercase">Or Email Login</span>
+            <div class="flex-grow border-t border-slate-800"></div>
+          </div>
+
+          <div>
+            <label class="block text-slate-300 font-semibold mb-1">Email Address:</label>
+            <input type="email" id="auth-email" placeholder="warrior@winterarc.com" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-emerald-400">
+          </div>
+          <div>
+            <label class="block text-slate-300 font-semibold mb-1">Password:</label>
+            <input type="password" id="auth-password" placeholder="••••••••" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-emerald-400">
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 pt-2">
+            <button onclick="signInWithEmail()" class="py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold rounded-xl transition-all">Sign In</button>
+            <button onclick="signUpWithEmail()" class="py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-bold rounded-xl transition-all">Register</button>
+          </div>
+        </div>
+
+        <div id="logged-in-section" class="space-y-4 hidden text-center">
+          <div class="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl space-y-1">
+            <i class="fa-solid fa-circle-check text-emerald-400 text-2xl mb-1"></i>
+            <div class="text-sm font-bold text-white">Authenticated & Synced</div>
+            <div id="user-email-display" class="text-xs text-emerald-300 font-mono">user@example.com</div>
+          </div>
+
+          <div class="flex gap-3">
+            <button onclick="syncAllToSupabase()" class="flex-1 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl">Force Cloud Sync</button>
+            <button onclick="signOutUser()" class="py-2.5 px-4 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 font-bold rounded-xl">Sign Out</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: SUPABASE KEYS CONFIG -->
+      <div id="authview-config" class="space-y-3 text-xs hidden">
+        <p class="text-slate-400">Enter your Supabase Project URL and Anon Key to enable Cloud Database Sync across devices.</p>
+        <div>
+          <label class="block text-slate-300 font-semibold mb-1">Supabase Project URL:</label>
+          <input type="text" id="sb-url-input" placeholder="https://xyz.supabase.co" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-emerald-400">
+        </div>
+        <div>
+          <label class="block text-slate-300 font-semibold mb-1">Supabase Anon Public Key:</label>
+          <input type="password" id="sb-key-input" placeholder="eyJhbGciOi..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-emerald-400">
+        </div>
+
+        <div class="pt-2 flex justify-end gap-2">
+          <button onclick="saveSupabaseConfig()" class="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold rounded-xl">Save Config & Connect</button>
+        </div>
+      </div>
+
     </div>
   </div>
 

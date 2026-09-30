@@ -1,6 +1,6 @@
 /**
  * Winter Arc Ultimate Habit Tracker & Data Analytics
- * State Management, Local Storage Persistence, Matrix Controller & Chart.js Integration
+ * State Management, Local Storage Persistence, Supabase Auth + Cloud DB Sync & Chart.js Integration
  */
 
 // Default Application State Structure
@@ -43,6 +43,12 @@ const RANKS = [
 // Chart Instances Store
 let chartInstances = {};
 
+// Supabase State Variables
+let supabaseUrl = localStorage.getItem("winterArc_sb_url") || "";
+let supabaseAnonKey = localStorage.getItem("winterArc_sb_key") || "";
+let supabaseClient = null;
+let currentUser = null;
+
 // ============================================================================
 // INITIALIZATION & STATE PERSISTENCE
 // ============================================================================
@@ -55,7 +61,8 @@ document.addEventListener("DOMContentLoaded", () => {
   renderDashboard();
   renderMatrixTable();
   renderReflections();
-  
+  initSupabase();
+
   // Set report date string
   const dateStrElement = document.getElementById("report-date-str");
   if(dateStrElement) {
@@ -63,11 +70,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-function saveState() {
+function saveState(autoCloudSync = true) {
   try {
     localStorage.setItem("winterArcData", JSON.stringify(appData));
   } catch (e) {
     console.error("Failed to save state to localStorage", e);
+  }
+
+  if (autoCloudSync && supabaseClient && currentUser) {
+    syncAllToSupabase();
   }
 }
 
@@ -76,7 +87,6 @@ function loadState() {
     const saved = localStorage.getItem("winterArcData");
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Deep merge saved state with default structure
       appData = { ...appData, ...parsed };
       if (!appData.habits || appData.habits.length === 0) {
         appData.habits = [
@@ -93,7 +103,6 @@ function loadState() {
     console.error("Error loading localStorage state:", e);
   }
 
-  // Populate user profile input values
   const nameInput = document.getElementById("user-name-input");
   const mottoInput = document.getElementById("user-motto-input");
   if(nameInput) nameInput.value = appData.userName || "Warrior Protocol";
@@ -107,6 +116,230 @@ function saveUserProfile() {
   if(mottoInput) appData.userMotto = mottoInput.value || "Discipline over motivation. Complete the 31-day arc.";
   saveState();
   showToast("Profile details updated!");
+}
+
+// ============================================================================
+// SUPABASE AUTHENTICATION & CLOUD SYNC
+// ============================================================================
+
+function initSupabase() {
+  const urlInput = document.getElementById("sb-url-input");
+  const keyInput = document.getElementById("sb-key-input");
+  if (urlInput) urlInput.value = supabaseUrl;
+  if (keyInput) keyInput.value = supabaseAnonKey;
+
+  if (window.supabase && supabaseUrl && supabaseAnonKey) {
+    try {
+      supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
+      
+      supabaseClient.auth.onAuthStateChange((event, session) => {
+        currentUser = session ? session.user : null;
+        updateAuthUI();
+        if (currentUser) {
+          fetchFromSupabase();
+        }
+      });
+
+      supabaseClient.auth.getSession().then(({ data }) => {
+        if (data && data.session) {
+          currentUser = data.session.user;
+          updateAuthUI();
+          fetchFromSupabase();
+        }
+      });
+    } catch (e) {
+      console.error("Supabase client init error:", e);
+      updateAuthUI();
+    }
+  } else {
+    updateAuthUI();
+  }
+}
+
+function saveSupabaseConfig() {
+  const urlInput = document.getElementById("sb-url-input");
+  const keyInput = document.getElementById("sb-key-input");
+
+  supabaseUrl = urlInput ? urlInput.value.trim() : "";
+  supabaseAnonKey = keyInput ? keyInput.value.trim() : "";
+
+  localStorage.setItem("winterArc_sb_url", supabaseUrl);
+  localStorage.setItem("winterArc_sb_key", supabaseAnonKey);
+
+  initSupabase();
+  showToast("Supabase credentials saved!");
+  switchAuthTab('login');
+}
+
+function updateAuthUI() {
+  const btnLabel = document.getElementById("auth-btn-label");
+  const loggedOutSec = document.getElementById("logged-out-section");
+  const loggedInSec = document.getElementById("logged-in-section");
+  const userEmailDisplay = document.getElementById("user-email-display");
+  const cloudBadge = document.getElementById("cloud-status-badge");
+
+  if (currentUser) {
+    if (btnLabel) btnLabel.innerText = currentUser.email ? currentUser.email.split("@")[0] : "Synced";
+    if (loggedOutSec) loggedOutSec.classList.add("hidden");
+    if (loggedInSec) loggedInSec.classList.remove("hidden");
+    if (userEmailDisplay) userEmailDisplay.innerText = currentUser.email || "Authenticated User";
+    if (cloudBadge) {
+      cloudBadge.innerText = "☁️ Cloud Synced";
+      cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 font-bold";
+    }
+  } else {
+    if (btnLabel) btnLabel.innerText = "Sync Cloud";
+    if (loggedOutSec) loggedOutSec.classList.remove("hidden");
+    if (loggedInSec) loggedInSec.classList.add("hidden");
+    if (cloudBadge) {
+      cloudBadge.innerText = "💾 Local Mode";
+      cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
+    }
+  }
+}
+
+async function signInWithEmail() {
+  if (!supabaseClient) {
+    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
+    switchAuthTab('config');
+    return;
+  }
+  const email = document.getElementById("auth-email").value.trim();
+  const password = document.getElementById("auth-password").value;
+  if (!email || !password) {
+    alert("Please enter both email and password.");
+    return;
+  }
+
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) {
+    alert("Login failed: " + error.message);
+  } else {
+    showToast("Signed in successfully!");
+    closeAuthModal();
+  }
+}
+
+async function signUpWithEmail() {
+  if (!supabaseClient) {
+    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
+    switchAuthTab('config');
+    return;
+  }
+  const email = document.getElementById("auth-email").value.trim();
+  const password = document.getElementById("auth-password").value;
+  if (!email || !password) {
+    alert("Please enter both email and password.");
+    return;
+  }
+
+  const { data, error } = await supabaseClient.auth.signUp({ email, password });
+  if (error) {
+    alert("Sign up failed: " + error.message);
+  } else {
+    showToast("Account created! Check your email to confirm.");
+  }
+}
+
+async function signInWithGoogle() {
+  if (!supabaseClient) {
+    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
+    switchAuthTab('config');
+    return;
+  }
+  const { data, error } = await supabaseClient.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.href }
+  });
+  if (error) {
+    alert("Google OAuth failed: " + error.message);
+  }
+}
+
+async function signOutUser() {
+  if (supabaseClient) {
+    await supabaseClient.auth.signOut();
+    currentUser = null;
+    updateAuthUI();
+    showToast("Signed out. Operating in local mode.");
+  }
+}
+
+async function syncAllToSupabase() {
+  if (!supabaseClient || !currentUser) return;
+
+  try {
+    const payload = {
+      user_id: currentUser.id,
+      state_data: appData,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabaseClient
+      .from("winter_arc_userdata")
+      .upsert(payload, { onConflict: "user_id" });
+
+    if (error) {
+      console.warn("Supabase Cloud sync warning:", error.message);
+    } else {
+      showToast("Cloud synced to Supabase!");
+    }
+  } catch (e) {
+    console.error("Supabase sync exception:", e);
+  }
+}
+
+async function fetchFromSupabase() {
+  if (!supabaseClient || !currentUser) return;
+
+  try {
+    const { data, error } = await supabaseClient
+      .from("winter_arc_userdata")
+      .select("state_data")
+      .eq("user_id", currentUser.id)
+      .single();
+
+    if (data && data.state_data) {
+      appData = { ...appData, ...data.state_data };
+      saveState(false);
+      applyTheme(appData.theme || "arctic");
+      renderDashboard();
+      renderMatrixTable();
+      renderReflections();
+      showToast("Cloud data loaded from Supabase!");
+    }
+  } catch (e) {
+    console.error("Fetch from Supabase exception:", e);
+  }
+}
+
+function openAuthModal() {
+  const modal = document.getElementById("modal-auth");
+  if (modal) modal.classList.remove("hidden");
+}
+
+function closeAuthModal() {
+  const modal = document.getElementById("modal-auth");
+  if (modal) modal.classList.add("hidden");
+}
+
+function switchAuthTab(tabName) {
+  const loginView = document.getElementById("authview-login");
+  const configView = document.getElementById("authview-config");
+  const loginTab = document.getElementById("authtab-login");
+  const configTab = document.getElementById("authtab-config");
+
+  if (tabName === 'login') {
+    if (loginView) loginView.classList.remove("hidden");
+    if (configView) configView.classList.add("hidden");
+    if (loginTab) loginTab.className = "px-4 py-2 font-bold text-emerald-400 border-b-2 border-emerald-400";
+    if (configTab) configTab.className = "px-4 py-2 font-bold text-slate-400 border-b-2 border-transparent";
+  } else {
+    if (loginView) loginView.classList.add("hidden");
+    if (configView) configView.classList.remove("hidden");
+    if (loginTab) loginTab.className = "px-4 py-2 font-bold text-slate-400 border-b-2 border-transparent";
+    if (configTab) configTab.className = "px-4 py-2 font-bold text-emerald-400 border-b-2 border-emerald-400";
+  }
 }
 
 // ============================================================================
@@ -147,7 +380,6 @@ function switchView(viewName) {
     }
   });
 
-  // Trigger view-specific re-renders
   if (viewName === "dashboard") {
     renderDashboard();
   } else if (viewName === "habits") {
@@ -182,13 +414,11 @@ function getRankInfo(xp) {
 function updateRankUI() {
   const rank = getRankInfo(appData.xp);
   
-  // Header Rank Pill
   const headerRank = document.getElementById("header-rank-title");
   const headerXp = document.getElementById("header-xp-val");
   if(headerRank) headerRank.innerText = rank.title;
   if(headerXp) headerXp.innerText = `${appData.xp} XP`;
 
-  // Dashboard Rank Badge & Bar
   const dashBadge = document.getElementById("dash-rank-badge");
   const xpText = document.getElementById("xp-progress-text");
   const xpBar = document.getElementById("xp-bar-fill");
@@ -261,13 +491,11 @@ function renderDashboardChecklist(day) {
     container.appendChild(item);
   });
 
-  // Render sleep logger for current day
   const sleepData = appData.sleepLogs[appData.currentDay] || { hours: 0, quality: 0 };
   const hoursSelect = document.getElementById("dash-sleep-hours");
   if(hoursSelect) hoursSelect.value = sleepData.hours || 0;
   updateSleepStarsUI(sleepData.quality || 0);
 
-  // Update Summary Metrics
   updateSummaryMetrics();
   renderMiniMatrix();
 }
@@ -362,7 +590,6 @@ function updateSummaryMetrics() {
   const totalPossible = (appData.habits.length || 1) * 31;
   const completionRate = Math.round((totalCompletions / totalPossible) * 100);
 
-  // Sleep Average
   let totalSleepHours = 0;
   let sleepLoggedDays = 0;
   Object.keys(appData.sleepLogs).forEach(d => {
@@ -373,7 +600,6 @@ function updateSummaryMetrics() {
   });
   const avgSleep = sleepLoggedDays > 0 ? (totalSleepHours / sleepLoggedDays).toFixed(1) : "0.0";
 
-  // Calculate Streak
   let streak = 0;
   for (let d = 1; d <= 31; d++) {
     let dayCompleted = 0;
@@ -387,7 +613,6 @@ function updateSummaryMetrics() {
     }
   }
 
-  // Update DOM elements
   const streakVal = document.getElementById("dash-streak-val");
   const compVal = document.getElementById("dash-completion-val");
   const sleepVal = document.getElementById("dash-sleep-val");
@@ -424,7 +649,6 @@ function toggleHabitLog(habitId, day, isChecked) {
   updateRankUI();
   updateSummaryMetrics();
 
-  // If active view is dashboard, sync dashboard checklist
   const dashView = document.getElementById("view-dashboard");
   if (dashView && !dashView.classList.contains("hidden")) {
     renderDashboardChecklist(appData.currentDay);
@@ -442,12 +666,10 @@ function renderMatrixTable() {
     return;
   }
 
-  // Render Habit Rows
   appData.habits.forEach((habit, hIdx) => {
     const tr = document.createElement("tr");
     tr.className = "border-b border-slate-800/80 hover:bg-slate-900/40 transition-all text-xs";
 
-    // Habit Info Sticky Column
     let html = `
       <td class="p-3 font-semibold sticky-col border-r border-slate-700/80">
         <div class="text-white font-bold">${escapeHtml(habit.name)}</div>
@@ -457,7 +679,6 @@ function renderMatrixTable() {
       </td>
     `;
 
-    // 31 Day Checkboxes
     for (let d = 1; d <= 31; d++) {
       const logKey = `${habit.id}-${d}`;
       const checked = !!appData.habitLogs[logKey];
@@ -468,7 +689,6 @@ function renderMatrixTable() {
       `;
     }
 
-    // Action / Delete Column
     html += `
       <td class="p-2 text-center">
         <button onclick="deleteHabit('${habit.id}')" title="Delete Habit Slot" class="text-slate-500 hover:text-rose-400 transition-colors">
@@ -481,7 +701,6 @@ function renderMatrixTable() {
     tbody.appendChild(tr);
   });
 
-  // Render Sleep Tracking Rows Section
   const sleepHoursTr = document.createElement("tr");
   sleepHoursTr.className = "bg-indigo-950/20 border-b border-indigo-900/40 text-xs font-semibold";
   let sleepHoursHtml = `
@@ -511,7 +730,6 @@ function renderMatrixTable() {
   sleepHoursTr.innerHTML = sleepHoursHtml;
   tbody.appendChild(sleepHoursTr);
 
-  // Sleep Quality Row
   const sleepQualTr = document.createElement("tr");
   sleepQualTr.className = "bg-indigo-950/10 border-b border-indigo-900/40 text-xs";
   let sleepQualHtml = `
@@ -551,7 +769,6 @@ function updateMatrixSleep(day, field, value) {
   showToast(`Day ${day} sleep ${field} updated`);
 }
 
-// Add Custom Habit Modal Handlers
 function openAddHabitModal() {
   const modal = document.getElementById("modal-add-habit");
   if (modal) modal.classList.remove("hidden");
@@ -591,7 +808,6 @@ function deleteHabit(habitId) {
   if (confirm("Are you sure you want to delete this habit slot? Existing log entries for this habit will be removed.")) {
     appData.habits = appData.habits.filter(h => h.id !== habitId);
     
-    // Remove habit log keys
     Object.keys(appData.habitLogs).forEach(key => {
       if (key.startsWith(`${habitId}-`)) {
         delete appData.habitLogs[key];
@@ -623,7 +839,6 @@ function renderAnalyticsCharts() {
 
   const labels = Array.from({ length: 31 }, (_, i) => `Day ${i + 1}`);
 
-  // Chart 1: Daily Habit Completion Rate (%)
   const completionData = labels.map((_, i) => {
     const day = i + 1;
     let done = 0;
@@ -661,7 +876,6 @@ function renderAnalyticsCharts() {
     });
   }
 
-  // Chart 2: Sleep Duration vs Quality
   const sleepHoursData = labels.map((_, i) => {
     const d = i + 1;
     return appData.sleepLogs[d] ? appData.sleepLogs[d].hours : 0;
@@ -712,7 +926,6 @@ function renderAnalyticsCharts() {
     });
   }
 
-  // Chart 3: Habit Breakdown Bar Chart
   const habitNames = appData.habits.map(h => h.name);
   const habitCompletions = appData.habits.map(h => {
     let count = 0;
@@ -748,7 +961,6 @@ function renderAnalyticsCharts() {
     });
   }
 
-  // Chart 4: Cumulative XP Trajectory
   let cumulativeXp = 0;
   const xpTrajectoryData = labels.map((_, i) => {
     const day = i + 1;
@@ -856,14 +1068,12 @@ function getVal(id) {
 function renderReport() {
   const rank = getRankInfo(appData.xp);
 
-  // Profile
   setTxt("report-user-name", appData.userName || "Warrior Protocol");
   setTxt("report-user-motto", `"${appData.userMotto || "Discipline over motivation."}"`);
   
   const rankBadgeEl = document.getElementById("report-rank-badge");
   if(rankBadgeEl) rankBadgeEl.innerText = `Lvl ${rank.level}: ${rank.title}`;
 
-  // KPI Calculations
   let totalCompletions = 0;
   Object.keys(appData.habitLogs).forEach(k => {
     if (appData.habitLogs[k]) totalCompletions++;
@@ -887,7 +1097,6 @@ function renderReport() {
   setTxt("rep-kpi-sleep", `${avgSleep}h`);
   setTxt("rep-kpi-xp", appData.xp);
 
-  // Habit Breakdown Table
   const tbody = document.getElementById("report-habit-tbody");
   if (tbody) {
     tbody.innerHTML = "";
@@ -911,7 +1120,6 @@ function renderReport() {
     });
   }
 
-  // Reflections Summary
   const refSummary = document.getElementById("report-reflections-summary");
   if (refSummary) {
     refSummary.innerHTML = "";
@@ -941,13 +1149,11 @@ function renderReport() {
   }
 }
 
-// Download/Save PDF Report via native print dialog optimized by @media print
 function downloadPDFReport() {
   renderReport();
   window.print();
 }
 
-// Export CSV Matrix Data
 function exportCSVData() {
   let csv = "Habit Name,Goal,";
   for (let d = 1; d <= 31; d++) {
@@ -967,7 +1173,6 @@ function exportCSVData() {
     csv += `${count},${pct}%\n`;
   });
 
-  // Add Sleep Row
   csv += '"Sleep Hours","8 hrs",';
   for (let d = 1; d <= 31; d++) {
     const hours = appData.sleepLogs[d] ? appData.sleepLogs[d].hours : 0;
@@ -975,7 +1180,6 @@ function exportCSVData() {
   }
   csv += "\n";
 
-  // Trigger Download
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -987,7 +1191,6 @@ function exportCSVData() {
   showToast("CSV Data exported successfully!");
 }
 
-// Export Full JSON State Backup
 function exportJSONBackup() {
   const jsonStr = JSON.stringify(appData, null, 2);
   const blob = new Blob([jsonStr], { type: "application/json" });
@@ -1001,7 +1204,6 @@ function exportJSONBackup() {
   showToast("JSON State Backup downloaded!");
 }
 
-// Import JSON State Backup
 function importJSONBackup(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -1028,7 +1230,6 @@ function importJSONBackup(event) {
   reader.readAsText(file);
 }
 
-// Reset Data Confirmation
 function confirmResetData() {
   if (confirm("DANGER: Are you sure you want to reset all habit logs, sleep logs, XP, and reflections? This action cannot be undone.")) {
     localStorage.removeItem("winterArcData");
