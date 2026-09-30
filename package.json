@@ -1,0 +1,12 @@
+{
+  "name": "winter-arc-tracker",
+  "version": "1.0.0",
+  "description": "Winter Arc Habit Tracker - Full Stack Architecture & Data Analytics",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx serve ."
+  },
+  "keywords": ["winter-arc", "habit-tracker", "discipline", "analytics"],
+  "author": "Winter Arc Team",
+  "license": "MIT"
+}
