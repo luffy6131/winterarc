@@ -185,29 +185,151 @@ function saveSupabaseConfig() {
   switchAuthTab('login');
 }
 
-function updateAuthUI() {
-  const btnLabel = document.getElementById("auth-btn-label");
+function getUserDisplayName(user) {
+  if (!user) return "User";
+  const meta = user.user_metadata || {};
+  if (meta.full_name) return meta.full_name;
+  if (meta.name) return meta.name;
+  if (meta.display_name) return meta.display_name;
+  if (user.email) return user.email.split("@")[0];
+  return "Warrior User";
+}
+
+function getUserAvatarUrl(user) {
+  if (!user) return null;
+  const meta = user.user_metadata || {};
+  return meta.avatar_url || meta.picture || null;
+}
+
+function getUserInitials(name, email) {
+  if (name && name !== "User" && name !== "Warrior User") {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    } else if (parts.length === 1 && parts[0].length > 0) {
+      return parts[0][0].toUpperCase();
+    }
+  }
+  if (email && email.length > 0) {
+    return email[0].toUpperCase();
+  }
+  return "W";
+}
+
+function toggleProfileDropdown(e) {
+  if (e) e.stopPropagation();
+  const dropdown = document.getElementById("user-profile-dropdown");
+  if (dropdown) {
+    dropdown.classList.toggle("hidden");
+  }
+}
+
+function closeProfileDropdown() {
+  const dropdown = document.getElementById("user-profile-dropdown");
+  if (dropdown && !dropdown.classList.contains("hidden")) {
+    dropdown.classList.add("hidden");
+  }
+}
+
+// Global Event Listeners for Dropdown auto-close
+document.addEventListener("click", (event) => {
+  const profileContainer = document.getElementById("user-profile-container");
+  if (profileContainer && !profileContainer.contains(event.target)) {
+    closeProfileDropdown();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeProfileDropdown();
+  }
+});
+
+function updateAuthUI(user = currentUser) {
+  const authHeaderBtn = document.getElementById("auth-header-btn");
+  const profileContainer = document.getElementById("user-profile-container");
+  
   const loggedOutSec = document.getElementById("logged-out-section");
   const loggedInSec = document.getElementById("logged-in-section");
   const userEmailDisplay = document.getElementById("user-email-display");
   const cloudBadge = document.getElementById("cloud-status-badge");
 
-  if (currentUser) {
-    if (btnLabel) btnLabel.innerText = currentUser.email ? currentUser.email.split("@")[0] : "Synced";
+  const avatarImgContainer = document.getElementById("user-avatar-img-container");
+  const dropdownAvatarContainer = document.getElementById("dropdown-avatar-container");
+
+  const dropdownUserName = document.getElementById("dropdown-user-name");
+  const dropdownUserEmail = document.getElementById("dropdown-user-email");
+  const dropdownSyncStatus = document.getElementById("dropdown-sync-status");
+
+  if (user) {
+    // Hide header login button, show avatar container
+    if (authHeaderBtn) authHeaderBtn.classList.add("hidden");
+    if (profileContainer) profileContainer.classList.remove("hidden");
+
+    const displayName = getUserDisplayName(user);
+    const avatarUrl = getUserAvatarUrl(user);
+    const email = user.email || "";
+    const initials = getUserInitials(displayName, email);
+
+    // Update Avatar UI
+    if (avatarUrl) {
+      if (avatarImgContainer) {
+        avatarImgContainer.innerHTML = `<img src="${avatarUrl}" alt="${displayName}" class="w-full h-full object-cover rounded-full">`;
+      }
+      if (dropdownAvatarContainer) {
+        dropdownAvatarContainer.innerHTML = `<img src="${avatarUrl}" alt="${displayName}" class="w-full h-full object-cover rounded-full">`;
+      }
+    } else {
+      if (avatarImgContainer) {
+        avatarImgContainer.innerHTML = `<span id="user-avatar-initials" class="font-bold">${initials}</span>`;
+      }
+      if (dropdownAvatarContainer) {
+        dropdownAvatarContainer.innerHTML = `<span id="dropdown-avatar-initials" class="font-bold">${initials}</span>`;
+      }
+    }
+
+    if (dropdownUserName) dropdownUserName.innerText = displayName;
+    if (dropdownUserEmail) dropdownUserEmail.innerText = email || "Authenticated User";
+
+    // Update Sync Status
+    if (dropdownSyncStatus) {
+      if (supabaseClient && user) {
+        dropdownSyncStatus.innerText = "Connected";
+        dropdownSyncStatus.className = "px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold";
+      } else {
+        dropdownSyncStatus.innerText = "Offline / Local";
+        dropdownSyncStatus.className = "px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold";
+      }
+    }
+
+    // Modal UI elements
     if (loggedOutSec) loggedOutSec.classList.add("hidden");
     if (loggedInSec) loggedInSec.classList.remove("hidden");
-    if (userEmailDisplay) userEmailDisplay.innerText = currentUser.email || "Authenticated User";
+    if (userEmailDisplay) userEmailDisplay.innerText = email || displayName;
     if (cloudBadge) {
       cloudBadge.innerText = "☁️ Cloud Synced";
       cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 font-bold";
     }
   } else {
+    // Show header login button, hide avatar container
+    if (authHeaderBtn) authHeaderBtn.classList.remove("hidden");
+    if (profileContainer) profileContainer.classList.add("hidden");
+    closeProfileDropdown();
+
+    const btnLabel = document.getElementById("auth-btn-label");
     if (btnLabel) btnLabel.innerText = "Sync Cloud";
+
+    // Modal UI elements
     if (loggedOutSec) loggedOutSec.classList.remove("hidden");
     if (loggedInSec) loggedInSec.classList.add("hidden");
     if (cloudBadge) {
-      cloudBadge.innerText = "💾 Local Mode";
-      cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
+      if (!supabaseUrl || !supabaseAnonKey) {
+        cloudBadge.innerText = "⚙️ Not Configured";
+        cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-300 border border-amber-500/40 font-bold";
+      } else {
+        cloudBadge.innerText = "💾 Local Mode";
+        cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
+      }
     }
   }
 }
@@ -271,6 +393,7 @@ async function signInWithGoogle() {
 }
 
 async function signOutUser() {
+  closeProfileDropdown();
   if (supabaseClient) {
     if (realtimeChannel) {
       supabaseClient.removeChannel(realtimeChannel);
@@ -278,8 +401,8 @@ async function signOutUser() {
     }
     await supabaseClient.auth.signOut();
     currentUser = null;
-    updateAuthUI();
-    showToast("Signed out. Operating in local mode.");
+    updateAuthUI(null);
+    showToast("Signed out successfully. Operating in local mode.");
   }
 }
 
@@ -411,269 +534,6 @@ function subscribeRealtime() {
     .subscribe();
 }
 
-// ============================================================================
-// INITIALIZATION & STATE PERSISTENCE
-// ============================================================================
-
-document.addEventListener("DOMContentLoaded", () => {
-  loadState();
-  initDaySelectors();
-  applyTheme(appData.theme || "arctic");
-  updateRankUI();
-  renderDashboard();
-  renderMatrixTable();
-  renderReflections();
-  initSupabase();
-
-  // Set report date string
-  const dateStrElement = document.getElementById("report-date-str");
-  if(dateStrElement) {
-    dateStrElement.innerText = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-  }
-});
-
-function saveState(autoCloudSync = true) {
-  try {
-    localStorage.setItem("winterArcData", JSON.stringify(appData));
-  } catch (e) {
-    console.error("Failed to save state to localStorage", e);
-  }
-
-  if (autoCloudSync && supabaseClient && currentUser) {
-    syncAllToSupabase();
-  }
-}
-
-function loadState() {
-  try {
-    const saved = localStorage.getItem("winterArcData");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      appData = { ...appData, ...parsed };
-      if (!appData.habits || appData.habits.length === 0) {
-        appData.habits = [
-          { id: "h1", name: "Workout / Training", goal: "60 Min" },
-          { id: "h2", name: "10k Daily Steps", goal: "10,000" },
-          { id: "h3", name: "Read 20 Pages", goal: "20 pgs" },
-          { id: "h4", name: "Cold Shower", goal: "Daily" },
-          { id: "h5", name: "No Sugar / Junk", goal: "Strict" },
-          { id: "h6", name: "Deep Work 4h", goal: "4 Hours" }
-        ];
-      }
-    }
-  } catch (e) {
-    console.error("Error loading localStorage state:", e);
-  }
-
-  const nameInput = document.getElementById("user-name-input");
-  const mottoInput = document.getElementById("user-motto-input");
-  if(nameInput) nameInput.value = appData.userName || "Warrior Protocol";
-  if(mottoInput) mottoInput.value = appData.userMotto || "Discipline over motivation. Complete the 31-day arc.";
-}
-
-function saveUserProfile() {
-  const nameInput = document.getElementById("user-name-input");
-  const mottoInput = document.getElementById("user-motto-input");
-  if(nameInput) appData.userName = nameInput.value || "Warrior Protocol";
-  if(mottoInput) appData.userMotto = mottoInput.value || "Discipline over motivation. Complete the 31-day arc.";
-  saveState();
-  showToast("Profile details updated!");
-}
-
-// ============================================================================
-// SUPABASE AUTHENTICATION & CLOUD SYNC
-// ============================================================================
-
-function initSupabase() {
-  const urlInput = document.getElementById("sb-url-input");
-  const keyInput = document.getElementById("sb-key-input");
-  if (urlInput) urlInput.value = supabaseUrl;
-  if (keyInput) keyInput.value = supabaseAnonKey;
-
-  if (window.supabase && supabaseUrl && supabaseAnonKey) {
-    try {
-      supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
-      
-      supabaseClient.auth.onAuthStateChange((event, session) => {
-        currentUser = session ? session.user : null;
-        updateAuthUI();
-        if (currentUser) {
-          fetchFromSupabase();
-        }
-      });
-
-      supabaseClient.auth.getSession().then(({ data }) => {
-        if (data && data.session) {
-          currentUser = data.session.user;
-          updateAuthUI();
-          fetchFromSupabase();
-        }
-      });
-    } catch (e) {
-      console.error("Supabase client init error:", e);
-      updateAuthUI();
-    }
-  } else {
-    updateAuthUI();
-  }
-}
-
-function saveSupabaseConfig() {
-  const urlInput = document.getElementById("sb-url-input");
-  const keyInput = document.getElementById("sb-key-input");
-
-  supabaseUrl = urlInput ? urlInput.value.trim() : "";
-  supabaseAnonKey = keyInput ? keyInput.value.trim() : "";
-
-  localStorage.setItem("winterArc_sb_url", supabaseUrl);
-  localStorage.setItem("winterArc_sb_key", supabaseAnonKey);
-
-  initSupabase();
-  showToast("Supabase credentials saved!");
-  switchAuthTab('login');
-}
-
-function updateAuthUI() {
-  const btnLabel = document.getElementById("auth-btn-label");
-  const loggedOutSec = document.getElementById("logged-out-section");
-  const loggedInSec = document.getElementById("logged-in-section");
-  const userEmailDisplay = document.getElementById("user-email-display");
-  const cloudBadge = document.getElementById("cloud-status-badge");
-
-  if (currentUser) {
-    if (btnLabel) btnLabel.innerText = currentUser.email ? currentUser.email.split("@")[0] : "Synced";
-    if (loggedOutSec) loggedOutSec.classList.add("hidden");
-    if (loggedInSec) loggedInSec.classList.remove("hidden");
-    if (userEmailDisplay) userEmailDisplay.innerText = currentUser.email || "Authenticated User";
-    if (cloudBadge) {
-      cloudBadge.innerText = "☁️ Cloud Synced";
-      cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 font-bold";
-    }
-  } else {
-    if (btnLabel) btnLabel.innerText = "Sync Cloud";
-    if (loggedOutSec) loggedOutSec.classList.remove("hidden");
-    if (loggedInSec) loggedInSec.classList.add("hidden");
-    if (cloudBadge) {
-      cloudBadge.innerText = "💾 Local Mode";
-      cloudBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
-    }
-  }
-}
-
-async function signInWithEmail() {
-  if (!supabaseClient) {
-    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
-    switchAuthTab('config');
-    return;
-  }
-  const email = document.getElementById("auth-email").value.trim();
-  const password = document.getElementById("auth-password").value;
-  if (!email || !password) {
-    alert("Please enter both email and password.");
-    return;
-  }
-
-  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-  if (error) {
-    alert("Login failed: " + error.message);
-  } else {
-    showToast("Signed in successfully!");
-    closeAuthModal();
-  }
-}
-
-async function signUpWithEmail() {
-  if (!supabaseClient) {
-    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
-    switchAuthTab('config');
-    return;
-  }
-  const email = document.getElementById("auth-email").value.trim();
-  const password = document.getElementById("auth-password").value;
-  if (!email || !password) {
-    alert("Please enter both email and password.");
-    return;
-  }
-
-  const { data, error } = await supabaseClient.auth.signUp({ email, password });
-  if (error) {
-    alert("Sign up failed: " + error.message);
-  } else {
-    showToast("Account created! Check your email to confirm.");
-  }
-}
-
-async function signInWithGoogle() {
-  if (!supabaseClient) {
-    alert("Please configure Supabase URL & Anon Key under Supabase Config tab first.");
-    switchAuthTab('config');
-    return;
-  }
-  const { data, error } = await supabaseClient.auth.signInWithOAuth({
-    provider: 'google',
-    options: { redirectTo: window.location.href }
-  });
-  if (error) {
-    alert("Google OAuth failed: " + error.message);
-  }
-}
-
-async function signOutUser() {
-  if (supabaseClient) {
-    await supabaseClient.auth.signOut();
-    currentUser = null;
-    updateAuthUI();
-    showToast("Signed out. Operating in local mode.");
-  }
-}
-
-async function syncAllToSupabase() {
-  if (!supabaseClient || !currentUser) return;
-
-  try {
-    const payload = {
-      user_id: currentUser.id,
-      state_data: appData,
-      updated_at: new Date().toISOString()
-    };
-
-    const { error } = await supabaseClient
-      .from("winter_arc_userdata")
-      .upsert(payload, { onConflict: "user_id" });
-
-    if (error) {
-      console.warn("Supabase Cloud sync warning:", error.message);
-    } else {
-      showToast("Cloud synced to Supabase!");
-    }
-  } catch (e) {
-    console.error("Supabase sync exception:", e);
-  }
-}
-
-async function fetchFromSupabase() {
-  if (!supabaseClient || !currentUser) return;
-
-  try {
-    const { data, error } = await supabaseClient
-      .from("winter_arc_userdata")
-      .select("state_data")
-      .eq("user_id", currentUser.id)
-      .single();
-
-    if (data && data.state_data) {
-      appData = { ...appData, ...data.state_data };
-      saveState(false);
-      applyTheme(appData.theme || "arctic");
-      renderDashboard();
-      renderMatrixTable();
-      renderReflections();
-      showToast("Cloud data loaded from Supabase!");
-    }
-  } catch (e) {
-    console.error("Fetch from Supabase exception:", e);
-  }
-}
 
 function openAuthModal() {
   const modal = document.getElementById("modal-auth");
